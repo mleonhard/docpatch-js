@@ -1,18 +1,17 @@
-# docpatch-js
-`docpatch.js` is a JavaScript library implementing the `<form docpatch>` attribute.
-
-# Overview
+# Docpatch
+[.zshrc](..%2F.zshrc)
+## Overview
 
 Docpatch is a stateless document compression scheme.
-A client, holding version 0 of a document, can request the latest version of the document
-and receive a diff to transform version 0 into that latest version.
+A client, holding version 0 of a document, can retrieve a diff,
+and use the diff to transform version 0 into the latest version of the document.
 
 Key terms:
 - A *docpatch file* holds a data file and splits it up into segments.
-- A *docpatch header* is a list of 64-bit XXH3 hashes of segments from a docpatch file.
-- A *docpatch diff* is a docpatch file that includes segments from a "base" docpatch file.
+- A *docpatch header* is a set of hashes of segments from a docpatch file.
+- A *docpatch diff file* is a docpatch file that uses hash references to include segments from a "base" docpatch file.
 
-# Docpatch File Format
+## Docpatch File Format
 
 A docpatch file holds a data file and splits it up into segments.
 
@@ -22,47 +21,54 @@ bytes around portions of the document that are likely to change.
 
 To convert a docpatch file back into the data file, remove the separator bytes.
 
-Mime type: `application/docpatch`
-
-# HTTP Header
+## HTTP Header
 
 The `Docpatch: ` header contains a sequence of hashes of the segments of the base docpatch file.
 
 To make the header value:
 1. For each segment in the base docpatch file:
-   - Get the bytes of the segment, not including start and end separator bytes.
-   - Calculate the [XXH3_64bits](https://cyan4973.github.io/xxHash/) hash of bytes.
-   - Convert the hash to a sequence of 8 bytes in [little-endian](https://en.wikipedia.org/wiki/Endianness) order.
+    - Get the bytes of the segment, not including start and end separator bytes.
+    - Calculate the [XXH3_64bits](https://cyan4973.github.io/xxHash/) hash of the bytes.
+    - Convert the hash to a sequence of 8 bytes in [little-endian](https://en.wikipedia.org/wiki/Endianness) order.
 2. Concatenate the hash byte sequences in any order.
 3. Encode the sequence in [Base64](https://en.wikipedia.org/wiki/Base64),
-   using the "standard" alphabet (the one from [RFC-4648](https://datatracker.ietf.org/doc/html/rfc4648#section-4)),
+   using the "standard" alphabet (from [RFC-4648](https://datatracker.ietf.org/doc/html/rfc4648#section-4)),
    without padding.
 
 To prevent [431 Request Header Fields Too Large](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/431) errors,
 applications should limit the number of segments when generating docpatch files.
 A good default limit is 94 segments, which limits the HTTP/1.1 docpatch header line to 1014 bytes.
 
-# Docpatch Diff Format
+## Docpatch Diff Format
 A docpatch diff file represents the differences between two docpatch files: the *base* file and *target* file.
-A computer program holding the base file and diff file can quickly produce the target file.
+A machine holding the base file and diff file can quickly produce the target file.
 
 A docpatch diff file is a sequence of segments and inclusions:
-* A segment is a sequence of bytes separated by the `^_` symbol.
+* The `^P` ([0x10 ASCII Data Link Escape](https://en.wikipedia.org/wiki/C0_and_C1_control_codes#DLE)) byte signals
+  an inclusion.
+  It must be followed by 12 bytes which are the XXH3_64bits hash of a base file segment,
+  in little-endian order, encoded in Base64 without padding.
+* A segment is any other sequence of bytes, delimited by `^_` or an inclusion.
 
-A docpatch diff file holds a compressed docpatch file.
-The data file is split up into segments.
-Some segments are elided and replaced with hashes referring to segments in the "base" docpatch file.
+## Content-Type
+Denote docpatch files with MIME type: `application/docpatch`.
+Denote docpatch diff files with MIME type: `application/docpatch-diff`.
 
-To create a docpatch file, take a data file and 
+When requesting a docpatch diff, send the `Accept: application/docpatch-diff` header.
 
-TODO:
-- Include hashed segments with `^P`
-  ([0x10 ASCII Data Link Escape](https://en.wikipedia.org/wiki/C0_and_C1_control_codes#DLE))
-  byte followed by the hash of the segment
-- Use [XXH3](https://cyan4973.github.io/xxHash/) to hash the segments
-- See the References segment of the [`flit`](https://crates.io/crates/flit) Rust library.
+Why use `Accept` and not `Accept-Encoding`?
+At the time of writing, browsers do not allow JavaScript to set the `Accept-Encoding` header.
+If browsers add support for docpatch, applications can switch to `Accept-Encoding`.
 
-# Example
+If your application must support various response content-types, send these types in a `Docpatch-accept: ` header.
+
+## Caching
+
+HTTP servers returning a docpatch diff file SHOULD include `Cache-Control: no-store` header
+to disallow caching of the response.  
+If the HTTP server allows caching, it MUST include the 'Vary: Docpatch' header in the response.
+
+## Example
 Example docpatch file:
 ```
 <html>
@@ -102,6 +108,9 @@ The file has four segments:
 - List item with message2
 - Everything after the last message
 
+TODO: Add example header
+TODO: Add example diff
+
 # Escaping
 To use docpatch with files that may contain the `^_` or `^P` symbols, you must escape these symbols.
 The recommended scheme is to use the
@@ -110,15 +119,3 @@ followed by the byte number in hexadecimal format:
 - `^[ -> ^[ 1 B`
 - `^_ -> ^[ 1 F`
 - `^P -> ^[ 1 0`
-
-# TO DO
-- Host on Github and a CDN
-- Make a release script that updates the hash in this readme.
-- Support `application/docpatch` content type.
-
-# Findings
-- JavaScript in a webpage can get HTML of the current page, with edits.
-  Lots of JavaScript libraries store their data in the DOM.
-  There is no way to get the file that the script was loaded from.
-- JavaScript can use the fetch API to re-request the current HTML page.
-  It can use an etag so the server can cache.
